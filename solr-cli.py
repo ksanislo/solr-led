@@ -11,6 +11,11 @@ INTERFACE = 1
 ENDPOINT_OUT = 0x02
 ENDPOINT_IN = 0x82
 
+FACTORY_COLORS = {
+    0x00: bytes([0x1B, 0xCA, 0xFF]),  # Thumbstick: sky blue
+}
+FACTORY_DEFAULT = bytes([0x50, 0xFF, 0xFF])  # All other zones: bright cyan
+
 LED_IDS = {
     0x00: "Thumbstick LED",
     0x01: "TM Logo Bottom",
@@ -179,6 +184,7 @@ def main():
     group_mode.add_argument('--buttons', type=str, help='Comma-separated list of button numbers to set (e.g. 5,6,7)')
     parser.add_argument('--list', action='store_true', help='List devices, groups, and buttons')
     parser.add_argument('--read', action='store_true', help='Read and display current EEPROM-stored LED colors')
+    parser.add_argument('--reset', action='store_true', help='Reset all LEDs to factory default colors (persistent)')
     parser.add_argument('--breathing', action='store_true', help='Make LEDs breathe (pulse) with fixed color')
     parser.add_argument('--rainbow', action='store_true', help='Make LEDs breathe with rainbow colors')
     parser.add_argument('--persistent', action='store_true', help='Save color to EEPROM (default: volatile)')
@@ -194,15 +200,15 @@ def main():
         print("Error: --device is required (use --list to see devices).")
         return
 
-    if not args.read and not args.group and not args.buttons:
-        print("Error: Either --group, --buttons, or --read must be specified (use --list to see options).")
+    if not args.read and not args.reset and not args.group and not args.buttons:
+        print("Error: Either --group, --buttons, --read, or --reset must be specified (use --list to see options).")
         return
 
     if args.breathing and args.rainbow:
         print("Error: --breathing and --rainbow cannot be used together.")
         return
 
-    if not args.read and (args.breathing or (not args.rainbow)) and not args.color:
+    if not args.read and not args.reset and (args.breathing or (not args.rainbow)) and not args.color:
         print("Error: Color argument is required (use RRGGBB hex).")
         return
 
@@ -252,6 +258,12 @@ def main():
                 r, g, b = colors[zid]
                 name = LED_IDS.get(zid, f"Zone 0x{zid:02X}")
                 print(f"  0x{zid:02X}  {name:<24s}  #{r:02X}{g:02X}{b:02X}")
+            return
+
+        if args.reset:
+            led_colors = {zid: FACTORY_COLORS.get(zid, FACTORY_DEFAULT) for zid in LED_IDS}
+            send_led_packet(dev, led_colors, persistent=True)
+            print("All LEDs reset to factory defaults and saved to EEPROM.")
             return
 
         if args.rainbow:

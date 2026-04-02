@@ -8,6 +8,11 @@ INTERFACE = 1
 ENDPOINT_OUT = 0x02
 ENDPOINT_IN = 0x82
 
+FACTORY_COLORS = {
+    0x00: bytes([0x1B, 0xCA, 0xFF]),  # Thumbstick: sky blue
+}
+FACTORY_DEFAULT = bytes([0x50, 0xFF, 0xFF])  # All other zones: bright cyan
+
 LED_IDS = {
     0x00: "Thumbstick LED",
     0x01: "TM Logo Bottom",
@@ -154,7 +159,7 @@ def main():
         led_colors = {}
 
         while True:
-            user_input = input("\nEnter LED ID (hex like 00), group name, 'read', or 'done': ").strip().lower()
+            user_input = input("\nEnter LED ID (hex), group name, 'read', 'reset', or 'done': ").strip().lower()
             if user_input == "done":
                 break
 
@@ -166,6 +171,12 @@ def main():
                     name = LED_IDS.get(zid, f"Zone 0x{zid:02X}")
                     print(f"  {zid:02X}: {name:<24s} #{r:02X}{g:02X}{b:02X}")
                 continue
+
+            if user_input == "reset":
+                led_colors = {zid: FACTORY_COLORS.get(zid, FACTORY_DEFAULT) for zid in LED_IDS}
+                send_led_packet(dev, led_colors, persistent=True)
+                print("All LEDs reset to factory defaults and saved to EEPROM.")
+                return
 
             if user_input in LED_GROUPS:
                 led_ids = LED_GROUPS[user_input]
