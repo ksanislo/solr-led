@@ -124,6 +124,7 @@ def main():
     parser.add_argument('--list', action='store_true', help='List devices, groups, and buttons')
     parser.add_argument('--breathing', action='store_true', help='Make LEDs breathe (pulse) with fixed color')
     parser.add_argument('--rainbow', action='store_true', help='Make LEDs breathe with rainbow colors')
+    parser.add_argument('--persistent', action='store_true', help='Save color to EEPROM (default: volatile)')
     parser.add_argument('color', nargs='?', help='Color in RRGGBB hex (required unless --rainbow)')
 
     args = parser.parse_args()
@@ -189,8 +190,11 @@ def main():
         else:
             color = hex_to_rgb(args.color)
             led_colors = {led: color for led in leds_to_set}
-            send_led_packet(dev, led_colors)
-            print("LED colors updated.")
+            send_led_packet(dev, led_colors, persistent=args.persistent)
+            if args.persistent:
+                print("LED colors saved to EEPROM.")
+            else:
+                print("LED colors updated.")
     except Exception as e:
         print(f"Error: {e}")
     finally:

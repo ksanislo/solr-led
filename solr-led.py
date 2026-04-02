@@ -147,8 +147,14 @@ def main():
             print("No LEDs selected. Exiting.")
             return
 
-        send_led_packet(dev, led_colors)
-        print("LED colors updated.")
+        persist_input = input("\nSave to EEPROM (persistent)? [y/N]: ").strip().lower()
+        persistent = persist_input in ("y", "yes")
+
+        send_led_packet(dev, led_colors, persistent=persistent)
+        if persistent:
+            print("LED colors saved to EEPROM.")
+        else:
+            print("LED colors updated.")
 
     except Exception as e:
         print(f"Error: {e}")
