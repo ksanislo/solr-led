@@ -31,19 +31,20 @@ GROUPS = {
     "right_buttons": [BUTTON_TO_LED[b] for b in [17, 16, 19, 18]],
 }
 
-def send_led_packet(dev, led_colors):
+def send_led_packet(dev, led_colors, persistent=False):
+    persist_flag = 0x80 if persistent else 0x00
     thumbstick_colors = {k: v for k, v in led_colors.items() if k == 0x00}
     other_colors = {k: v for k, v in led_colors.items() if k != 0x00}
 
     for led_id, color in thumbstick_colors.items():
-        packet = bytes([0x01, 0x88, 0x81, 0xFF]) + bytes([led_id]) + color
+        packet = bytes([0x01, 0x88, persist_flag | 0x01, 0xFF]) + bytes([led_id]) + color
         dev.write(ENDPOINT_OUT, packet, timeout=1000)
         time.sleep(0.01)
 
     keys = list(other_colors.keys())
     for i in range(0, len(keys), 2):
         batch = {k: other_colors[k] for k in keys[i:i+2]}
-        packet = bytes([0x01, 0x08, 0x85, 0xFF])
+        packet = bytes([0x01, 0x08, persist_flag | len(batch), 0xFF])
         for led_id, color in batch.items():
             packet += bytes([led_id]) + color
         dev.write(ENDPOINT_OUT, packet, timeout=1000)
