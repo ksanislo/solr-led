@@ -11,16 +11,18 @@ INTERFACE = 1
 ENDPOINT_OUT = 0x02
 ENDPOINT_IN = 0x82
 
+THUMBSTICK_ID = 0x80  # Virtual ID for grip thumbstick (actual zone 0x00 via 0x88 header)
+
 FACTORY_COLORS = {
-    0x00: bytes([0x1B, 0xCA, 0xFF]),  # Thumbstick: sky blue
+    THUMBSTICK_ID: bytes([0x1B, 0xCA, 0xFF]),  # Thumbstick: sky blue
 }
 FACTORY_DEFAULT = bytes([0x50, 0xFF, 0xFF])  # All other zones: bright cyan
 
 LED_IDS = {
-    0x00: "Thumbstick LED",
-    0x01: "TM Logo Bottom",
-    0x02: "TM Logo Right",
-    0x03: "TM Logo Left",
+    0x00: "TM Logo Top Right",
+    0x01: "TM Logo Top Left",
+    0x02: "TM Logo Bottom Left",
+    0x03: "TM Logo Bottom Right",
     0x04: "Upper Circle",
     0x05: "Upper Right Circle",
     0x06: "Right Middle Circle",
@@ -37,11 +39,11 @@ LED_IDS = {
     0x11: "Button 5",
     0x12: "Button 7",
     0x13: "Button 8",
+    THUMBSTICK_ID: "Thumbstick LED",
 }
 
-# Button to LED mapping (including thumb = 0x00)
+# Button to LED mapping
 BUTTON_TO_LED = {
-    0: 0x00,    # thumb
     5: 0x11,
     6: 0x10,
     7: 0x12,
@@ -54,7 +56,7 @@ BUTTON_TO_LED = {
 
 # Groups of LEDs by name
 GROUPS = {
-    "tm_logo": [0x01, 0x02, 0x03],
+    "tm_logo": [0x00, 0x01, 0x02, 0x03],
     "upper_circles": [0x04, 0x05, 0x06, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
     "left_buttons": [BUTTON_TO_LED[b] for b in [5, 6, 7, 8]],
     "right_buttons": [BUTTON_TO_LED[b] for b in [17, 16, 19, 18]],
@@ -62,17 +64,18 @@ GROUPS = {
 
 def send_led_packet(dev, led_colors, persistent=False):
     persist_flag = 0x80 if persistent else 0x00
-    thumbstick_colors = {k: v for k, v in led_colors.items() if k == 0x00}
-    other_colors = {k: v for k, v in led_colors.items() if k != 0x00}
 
-    for led_id, color in thumbstick_colors.items():
-        packet = bytes([0x01, 0x88, persist_flag | 0x01, 0xFF]) + bytes([led_id]) + color
+    # Thumbstick uses 0x88 header and actual zone 0x00 on the grip
+    if THUMBSTICK_ID in led_colors:
+        color = led_colors[THUMBSTICK_ID]
+        packet = bytes([0x01, 0x88, persist_flag | 0x01, 0xFF, 0x00]) + color
         dev.write(ENDPOINT_OUT, packet, timeout=1000)
-        time.sleep(0.01)
 
-    keys = list(other_colors.keys())
+    # All other LEDs use 0x08 header on the base
+    base_colors = {k: v for k, v in led_colors.items() if k != THUMBSTICK_ID}
+    keys = list(base_colors.keys())
     for i in range(0, len(keys), 2):
-        batch = {k: other_colors[k] for k in keys[i:i+2]}
+        batch = {k: base_colors[k] for k in keys[i:i+2]}
         packet = bytes([0x01, 0x08, persist_flag | len(batch), 0xFF])
         for led_id, color in batch.items():
             packet += bytes([led_id]) + color
@@ -80,9 +83,12 @@ def send_led_packet(dev, led_colors, persistent=False):
         time.sleep(0.01)
 
 def read_led_colors(dev):
-    """Read EEPROM-stored LED colors from the device."""
-    colors = {}
+    """Read EEPROM-stored LED colors from the device.
+    Returns dict: {report_type: {zid: (r, g, b), ...}, ...}
+    """
+    results = {}
     for report_type in [0x0002, 0x8002]:  # base zones, then grip zones
+        colors = {}
         start = 0
         while True:
             pkt = bytearray(64)
@@ -109,7 +115,8 @@ def read_led_colors(dev):
             start = last + 1
             if n < 14 or start > 0x20:
                 break
-    return colors
+        results[report_type] = colors
+    return results
 
 def hex_to_rgb(hex_str):
     if len(hex_str) != 6:
@@ -182,6 +189,7 @@ def main():
     group_mode = parser.add_mutually_exclusive_group()
     group_mode.add_argument('--group', choices=GROUPS.keys(), help='Group of LEDs to set')
     group_mode.add_argument('--buttons', type=str, help='Comma-separated list of button numbers to set (e.g. 5,6,7)')
+    group_mode.add_argument('--thumb', action='store_true', help='Set the grip thumbstick LED')
     parser.add_argument('--list', action='store_true', help='List devices, groups, and buttons')
     parser.add_argument('--read', action='store_true', help='Read and display current EEPROM-stored LED colors')
     parser.add_argument('--reset', action='store_true', help='Reset all LEDs to factory default colors (persistent)')
@@ -200,8 +208,8 @@ def main():
         print("Error: --device is required (use --list to see devices).")
         return
 
-    if not args.read and not args.reset and not args.group and not args.buttons:
-        print("Error: Either --group, --buttons, --read, or --reset must be specified (use --list to see options).")
+    if not args.read and not args.reset and not args.group and not args.buttons and not args.thumb:
+        print("Error: Either --group, --buttons, --thumb, --read, or --reset must be specified (use --list to see options).")
         return
 
     if args.breathing and args.rainbow:
@@ -230,7 +238,9 @@ def main():
 
     # Determine LEDs to set (not needed for --read or --reset)
     leds_to_set = []
-    if args.group:
+    if args.thumb:
+        leds_to_set = [THUMBSTICK_ID]
+    elif args.group:
         leds_to_set = GROUPS[args.group]
     elif args.buttons:
         try:
@@ -253,11 +263,22 @@ def main():
             pass
 
         if args.read:
-            colors = read_led_colors(dev)
-            for zid in sorted(colors.keys()):
-                r, g, b = colors[zid]
-                name = LED_IDS.get(zid, f"Zone 0x{zid:02X}")
-                print(f"  0x{zid:02X}  {name:<24s}  #{r:02X}{g:02X}{b:02X}")
+            results = read_led_colors(dev)
+            report_labels = {0x0002: "Base (0x0002)", 0x8002: "Grip (0x8002)"}
+            for report_type in [0x0002, 0x8002]:
+                colors = results.get(report_type, {})
+                label = report_labels[report_type]
+                print(f"\n  {label}:")
+                if not colors:
+                    print(f"    (no zones returned)")
+                for zid in sorted(colors.keys()):
+                    r, g, b = colors[zid]
+                    if report_type == 0x8002 and zid == 0x00:
+                        display_id = THUMBSTICK_ID
+                    else:
+                        display_id = zid
+                    name = LED_IDS.get(display_id, f"Zone 0x{zid:02X}")
+                    print(f"    0x{zid:02X}  {name:<24s}  #{r:02X}{g:02X}{b:02X}")
             return
 
         if args.reset:
