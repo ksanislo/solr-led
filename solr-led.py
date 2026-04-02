@@ -6,6 +6,7 @@ VID = 0x044f
 PIDS = [0x0422, 0x042a]
 INTERFACE = 1
 ENDPOINT_OUT = 0x02
+ENDPOINT_IN = 0x82
 
 LED_IDS = {
     0x00: "Thumbstick LED",
@@ -56,6 +57,38 @@ def send_led_packet(dev, led_colors, persistent=False):
         dev.write(ENDPOINT_OUT, packet, timeout=1000)
         time.sleep(0.01)
 
+def read_led_colors(dev):
+    """Read EEPROM-stored LED colors from the device."""
+    colors = {}
+    for report_type in [0x0002, 0x8002]:  # base zones, then grip zones
+        start = 0
+        while True:
+            pkt = bytearray(64)
+            pkt[0] = report_type & 0xFF
+            pkt[1] = (report_type >> 8) & 0xFF
+            pkt[2] = start
+            dev.write(ENDPOINT_OUT, bytes(pkt), timeout=1000)
+            time.sleep(0.02)
+            try:
+                resp = bytes(dev.read(ENDPOINT_IN, 64, timeout=1000))
+            except usb.core.USBTimeoutError:
+                break
+            if (resp[0] | resp[1] << 8) != report_type:
+                break
+            n = resp[2] & 0x0F
+            if n == 0:
+                break
+            last = start
+            for i in range(n):
+                off = 4 + i * 4
+                zid, r, g, b = resp[off], resp[off+1], resp[off+2], resp[off+3]
+                colors[zid] = (r, g, b)
+                last = zid
+            start = last + 1
+            if n < 14 or start > 0x20:
+                break
+    return colors
+
 def hex_to_rgb(hex_str):
     if len(hex_str) != 6:
         raise ValueError("Hex color must be 6 characters (e.g. 'ff0000')")
@@ -104,6 +137,13 @@ def main():
     usb.util.claim_interface(dev, INTERFACE)
 
     try:
+        # Drain any pending data on IN endpoint
+        try:
+            while True:
+                dev.read(ENDPOINT_IN, 64, timeout=100)
+        except usb.core.USBTimeoutError:
+            pass
+
         print("Available LEDs:")
         for lid, label in LED_IDS.items():
             print(f"  {lid:02X}: {label}")
@@ -114,9 +154,18 @@ def main():
         led_colors = {}
 
         while True:
-            user_input = input("\nEnter LED ID (hex like 00) or group name (e.g. tm_logo), or 'done': ").strip().lower()
+            user_input = input("\nEnter LED ID (hex like 00), group name, 'read', or 'done': ").strip().lower()
             if user_input == "done":
                 break
+
+            if user_input == "read":
+                print("\nReading EEPROM-stored colors...")
+                colors = read_led_colors(dev)
+                for zid in sorted(colors.keys()):
+                    r, g, b = colors[zid]
+                    name = LED_IDS.get(zid, f"Zone 0x{zid:02X}")
+                    print(f"  {zid:02X}: {name:<24s} #{r:02X}{g:02X}{b:02X}")
+                continue
 
             if user_input in LED_GROUPS:
                 led_ids = LED_GROUPS[user_input]

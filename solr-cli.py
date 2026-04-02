@@ -9,6 +9,30 @@ VID = 0x044f
 PIDS = [0x0422, 0x042a]  # 0422 = right, 042a = left
 INTERFACE = 1
 ENDPOINT_OUT = 0x02
+ENDPOINT_IN = 0x82
+
+LED_IDS = {
+    0x00: "Thumbstick LED",
+    0x01: "TM Logo Bottom",
+    0x02: "TM Logo Right",
+    0x03: "TM Logo Left",
+    0x04: "Upper Circle",
+    0x05: "Upper Right Circle",
+    0x06: "Right Middle Circle",
+    0x07: "Button 17",
+    0x08: "Button 16",
+    0x09: "Button 18",
+    0x0A: "Button 19",
+    0x0B: "Bottom Right Circle",
+    0x0C: "Bottom Circle",
+    0x0D: "Bottom Left Circle",
+    0x0E: "Left Center Circle",
+    0x0F: "Upper Left Circle",
+    0x10: "Button 6",
+    0x11: "Button 5",
+    0x12: "Button 7",
+    0x13: "Button 8",
+}
 
 # Button to LED mapping (including thumb = 0x00)
 BUTTON_TO_LED = {
@@ -49,6 +73,38 @@ def send_led_packet(dev, led_colors, persistent=False):
             packet += bytes([led_id]) + color
         dev.write(ENDPOINT_OUT, packet, timeout=1000)
         time.sleep(0.01)
+
+def read_led_colors(dev):
+    """Read EEPROM-stored LED colors from the device."""
+    colors = {}
+    for report_type in [0x0002, 0x8002]:  # base zones, then grip zones
+        start = 0
+        while True:
+            pkt = bytearray(64)
+            pkt[0] = report_type & 0xFF
+            pkt[1] = (report_type >> 8) & 0xFF
+            pkt[2] = start
+            dev.write(ENDPOINT_OUT, bytes(pkt), timeout=1000)
+            time.sleep(0.02)
+            try:
+                resp = bytes(dev.read(ENDPOINT_IN, 64, timeout=1000))
+            except usb.core.USBTimeoutError:
+                break
+            if (resp[0] | resp[1] << 8) != report_type:
+                break
+            n = resp[2] & 0x0F
+            if n == 0:
+                break
+            last = start
+            for i in range(n):
+                off = 4 + i * 4
+                zid, r, g, b = resp[off], resp[off+1], resp[off+2], resp[off+3]
+                colors[zid] = (r, g, b)
+                last = zid
+            start = last + 1
+            if n < 14 or start > 0x20:
+                break
+    return colors
 
 def hex_to_rgb(hex_str):
     if len(hex_str) != 6:
@@ -122,10 +178,11 @@ def main():
     group_mode.add_argument('--group', choices=GROUPS.keys(), help='Group of LEDs to set')
     group_mode.add_argument('--buttons', type=str, help='Comma-separated list of button numbers to set (e.g. 5,6,7)')
     parser.add_argument('--list', action='store_true', help='List devices, groups, and buttons')
+    parser.add_argument('--read', action='store_true', help='Read and display current EEPROM-stored LED colors')
     parser.add_argument('--breathing', action='store_true', help='Make LEDs breathe (pulse) with fixed color')
     parser.add_argument('--rainbow', action='store_true', help='Make LEDs breathe with rainbow colors')
     parser.add_argument('--persistent', action='store_true', help='Save color to EEPROM (default: volatile)')
-    parser.add_argument('color', nargs='?', help='Color in RRGGBB hex (required unless --rainbow)')
+    parser.add_argument('color', nargs='?', help='Color in RRGGBB hex (required unless --rainbow or --read)')
 
     args = parser.parse_args()
 
@@ -137,15 +194,15 @@ def main():
         print("Error: --device is required (use --list to see devices).")
         return
 
-    if not args.group and not args.buttons:
-        print("Error: Either --group or --buttons must be specified (use --list to see options).")
+    if not args.read and not args.group and not args.buttons:
+        print("Error: Either --group, --buttons, or --read must be specified (use --list to see options).")
         return
 
     if args.breathing and args.rainbow:
         print("Error: --breathing and --rainbow cannot be used together.")
         return
 
-    if (args.breathing or (not args.rainbow)) and not args.color:
+    if not args.read and (args.breathing or (not args.rainbow)) and not args.color:
         print("Error: Color argument is required (use RRGGBB hex).")
         return
 
@@ -165,16 +222,16 @@ def main():
 
     usb.util.claim_interface(dev, INTERFACE)
 
-    # Determine LEDs to set
+    # Determine LEDs to set (not needed for --read or --reset)
+    leds_to_set = []
     if args.group:
         leds_to_set = GROUPS[args.group]
-    else:
+    elif args.buttons:
         try:
             buttons = [int(b.strip()) for b in args.buttons.split(',')]
         except ValueError:
             print("Invalid button numbers in --buttons argument.")
             return
-        leds_to_set = []
         for b in buttons:
             if b not in BUTTON_TO_LED:
                 print(f"Button {b} is not known.")
@@ -182,6 +239,21 @@ def main():
             leds_to_set.append(BUTTON_TO_LED[b])
 
     try:
+        # Drain any pending data on IN endpoint
+        try:
+            while True:
+                dev.read(ENDPOINT_IN, 64, timeout=100)
+        except usb.core.USBTimeoutError:
+            pass
+
+        if args.read:
+            colors = read_led_colors(dev)
+            for zid in sorted(colors.keys()):
+                r, g, b = colors[zid]
+                name = LED_IDS.get(zid, f"Zone 0x{zid:02X}")
+                print(f"  0x{zid:02X}  {name:<24s}  #{r:02X}{g:02X}{b:02X}")
+            return
+
         if args.rainbow:
             rainbow_breathing_effect(dev, leds_to_set)
         elif args.breathing:
